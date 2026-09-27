@@ -2,7 +2,7 @@ import streamlit as st
 from ingestion.ingestion_manager import process_file
 import tempfile
 import os
-
+import hashlib
 
 # --------------------------------------------------
 # Page configuration
@@ -60,15 +60,19 @@ if uploaded_files:
         )[1].lower()
 
         # Save uploaded file temporarily
+        file_bytes = uploaded_file.read()
+
+        document_id = hashlib.sha256(
+            file_bytes
+        ).hexdigest()
+
+
         with tempfile.NamedTemporaryFile(
             delete=False,
             suffix=file_extension
         ) as temp_file:
 
-            temp_file.write(
-                uploaded_file.read()
-            )
-
+            temp_file.write(file_bytes)
             temp_path = temp_file.name
 
         try:
@@ -76,7 +80,8 @@ if uploaded_files:
             # Send file to ingestion manager
             result = process_file(temp_path)
 
-            # Store processed document
+            result["metadata"]["document_id"] = document_id
+
             st.session_state.documents.append(result)
 
             # Remember processed file
@@ -136,6 +141,11 @@ if st.session_state.documents:
         st.write(
             f"**{metadata['source']}**"
         )
+
+        st.write(
+            f"Document ID: `{metadata['document_id']}`"
+        )
+
 
         st.write(
             f"Type: `{metadata['file_type']}`"

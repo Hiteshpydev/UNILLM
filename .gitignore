@@ -6,3 +6,7 @@ uploads/
 .streamlit/
 # Extracted embedded images
 extracted_images/
+test_chunk.py
+test_image.py
+test_manager.py
+test_ocr.py
