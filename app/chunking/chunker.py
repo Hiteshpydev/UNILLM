@@ -141,8 +141,8 @@ def split_text_into_sentences(text):
 
 def create_text_children(
     text,
-    target_tokens=800,
-    overlap_tokens=100
+    target_tokens=400,
+    overlap_tokens=50
 ):
     """
     Split text into semantic-ish chunks.
@@ -223,18 +223,16 @@ def create_text_children(
 
     return chunks
 
-
 def create_children(
     parent,
-    target_tokens=800,
-    overlap_tokens=100
+    target_tokens=400,
+    overlap_tokens=50
 ):
     """
-    Create child chunks from a parent.
+    Create child chunks from a parent while preserving
+    the original document order and source locations.
 
-    All text items inside the parent are combined first,
-    then split into larger semantic chunks.
-
+    Text items are combined into larger chunks.
     Tables and images remain individual children.
     """
 
@@ -244,11 +242,12 @@ def create_children(
     children = []
     chunk_counter = 1
 
-    text_items = []
+    # ============================================================
+    # Build ordered segments
+    # ============================================================
 
-    # ========================================
-    # Collect all text from the parent
-    # ========================================
+    segments = []
+    text_buffer = []
 
     for item in parent["content"]:
 
@@ -260,16 +259,227 @@ def create_children(
             text = content.get("text", "").strip()
 
             if text:
-                text_items.append({
+                text_buffer.append({
                     "text": text,
                     "location": item["location"]
                 })
 
         else:
 
-            # --------------------------------
-            # Tables / Images
-            # --------------------------------
+            # Flush accumulated text before non-text item
+            if text_buffer:
+                segments.append({
+                    "type": "text",
+                    "items": text_buffer
+                })
+
+                text_buffer = []
+
+            segments.append({
+                "type": content_type,
+                "item": item
+            })
+
+    # Flush remaining text
+    if text_buffer:
+        segments.append({
+            "type": "text",
+            "items": text_buffer
+        })
+
+    # ============================================================
+    # Create children in original document order
+    # ============================================================
+
+    for segment in segments:
+
+        # --------------------------------------------------------
+        # TEXT
+        # --------------------------------------------------------
+
+        if segment["type"] == "text":
+
+            text_items = segment["items"]
+
+            sentences = []
+
+            # Keep the source location attached to every sentence
+            for item in text_items:
+
+                item_sentences = split_text_into_sentences(
+                    item["text"]
+                )
+
+                for sentence in item_sentences:
+
+                    sentences.append({
+                        "text": sentence,
+                        "location": item["location"]
+                    })
+
+            current_sentences = []
+            current_tokens = 0
+
+            for sentence_data in sentences:
+
+                sentence = sentence_data["text"]
+                sentence_tokens = estimate_tokens(sentence)
+
+                # ------------------------------------------------
+                # Current chunk is full
+                # ------------------------------------------------
+
+                if (
+                    current_sentences
+                    and current_tokens + sentence_tokens
+                    > target_tokens
+                ):
+
+                    chunk_text = " ".join(
+                        item["text"]
+                        for item in current_sentences
+                    )
+
+                    locations = [
+                        item["location"]
+                        for item in current_sentences
+                    ]
+
+                    # Remove consecutive duplicate locations
+                    unique_locations = []
+
+                    for location in locations:
+                        if location not in unique_locations:
+                            unique_locations.append(location)
+
+                    chunk_id = (
+                        f"{parent_id}_chunk_{chunk_counter}"
+                    )
+
+                    children.append({
+
+                        "chunk_id": chunk_id,
+
+                        "parent_id": parent_id,
+
+                        "document_id": document_id,
+
+                        "location": unique_locations,
+
+                        "content": {
+                            "type": "text",
+                            "text": chunk_text
+                        },
+
+                        "metadata": {
+                            "source": parent["metadata"]["source"],
+                            "file_type": parent["metadata"]["file_type"],
+                            "estimated_tokens": estimate_tokens(
+                                chunk_text
+                            )
+                        }
+                    })
+
+                    chunk_counter += 1
+
+                    # --------------------------------------------
+                    # Create overlap
+                    # --------------------------------------------
+
+                    overlap_sentences = []
+                    overlap_count = 0
+
+                    for previous_sentence in reversed(
+                        current_sentences
+                    ):
+
+                        previous_tokens = estimate_tokens(
+                            previous_sentence["text"]
+                        )
+
+                        if (
+                            overlap_count + previous_tokens
+                            > overlap_tokens
+                        ):
+                            break
+
+                        overlap_sentences.insert(
+                            0,
+                            previous_sentence
+                        )
+
+                        overlap_count += previous_tokens
+
+                    current_sentences = overlap_sentences
+                    current_tokens = overlap_count
+
+                current_sentences.append(
+                    sentence_data
+                )
+
+                current_tokens += sentence_tokens
+
+            # ----------------------------------------------------
+            # Final text chunk
+            # ----------------------------------------------------
+
+            if current_sentences:
+
+                chunk_text = " ".join(
+                    item["text"]
+                    for item in current_sentences
+                )
+
+                locations = [
+                    item["location"]
+                    for item in current_sentences
+                ]
+
+                unique_locations = []
+
+                for location in locations:
+                    if location not in unique_locations:
+                        unique_locations.append(location)
+
+                chunk_id = (
+                    f"{parent_id}_chunk_{chunk_counter}"
+                )
+
+                children.append({
+
+                    "chunk_id": chunk_id,
+
+                    "parent_id": parent_id,
+
+                    "document_id": document_id,
+
+                    "location": unique_locations,
+
+                    "content": {
+                        "type": "text",
+                        "text": chunk_text
+                    },
+
+                    "metadata": {
+                        "source": parent["metadata"]["source"],
+                        "file_type": parent["metadata"]["file_type"],
+                        "estimated_tokens": estimate_tokens(
+                            chunk_text
+                        )
+                    }
+                })
+
+                chunk_counter += 1
+
+        # --------------------------------------------------------
+        # TABLE / IMAGE
+        # --------------------------------------------------------
+
+        else:
+
+            item = segment["item"]
+            content = item["content"]
+            content_type = content["type"]
 
             chunk_id = (
                 f"{parent_id}_chunk_{chunk_counter}"
@@ -281,7 +491,9 @@ def create_children(
 
             if content_type == "table":
 
-                child_content["data"] = content["data"]
+                child_content["data"] = (
+                    content["data"]
+                )
 
             elif content_type == "image":
 
@@ -314,170 +526,13 @@ def create_children(
 
             chunk_counter += 1
 
-    # ========================================
-    # Combine ALL text from the parent
-    # ========================================
-
-    combined_text = "\n".join(
-        item["text"]
-        for item in text_items
-    )
-
-    if not combined_text:
-        return children
-
-    # ========================================
-    # Split combined text into sentences
-    # ========================================
-
-    sentences = split_text_into_sentences(
-        combined_text
-    )
-
-    current_sentences = []
-    current_tokens = 0
-
-    for sentence in sentences:
-
-        sentence_tokens = estimate_tokens(sentence)
-
-        # --------------------------------
-        # Chunk full
-        # --------------------------------
-
-        if (
-            current_sentences
-            and current_tokens + sentence_tokens
-            > target_tokens
-        ):
-
-            chunk_text = " ".join(
-                current_sentences
-            )
-
-            locations = [
-                item["location"]
-                for item in text_items
-                if item["text"] in chunk_text
-            ]
-
-            chunk_id = (
-                f"{parent_id}_chunk_{chunk_counter}"
-            )
-
-            children.append({
-
-                "chunk_id": chunk_id,
-
-                "parent_id": parent_id,
-
-                "document_id": document_id,
-
-                "location": locations,
-
-                "content": {
-                    "type": "text",
-                    "text": chunk_text
-                },
-
-                "metadata": {
-                    "source": parent["metadata"]["source"],
-                    "file_type": parent["metadata"]["file_type"],
-                    "estimated_tokens": estimate_tokens(
-                        chunk_text
-                    )
-                }
-            })
-
-            chunk_counter += 1
-
-            # --------------------------------
-            # Keep overlap
-            # --------------------------------
-
-            overlap_sentences = []
-            overlap_count = 0
-
-            for previous_sentence in reversed(
-                current_sentences
-            ):
-
-                previous_tokens = estimate_tokens(
-                    previous_sentence
-                )
-
-                if (
-                    overlap_count + previous_tokens
-                    > overlap_tokens
-                ):
-                    break
-
-                overlap_sentences.insert(
-                    0,
-                    previous_sentence
-                )
-
-                overlap_count += previous_tokens
-
-            current_sentences = overlap_sentences
-            current_tokens = overlap_count
-
-        current_sentences.append(sentence)
-
-        current_tokens += sentence_tokens
-
-    # ========================================
-    # Final text chunk
-    # ========================================
-
-    if current_sentences:
-
-        chunk_text = " ".join(
-            current_sentences
-        )
-
-        locations = [
-            item["location"]
-            for item in text_items
-            if item["text"] in chunk_text
-        ]
-
-        chunk_id = (
-            f"{parent_id}_chunk_{chunk_counter}"
-        )
-
-        children.append({
-
-            "chunk_id": chunk_id,
-
-            "parent_id": parent_id,
-
-            "document_id": document_id,
-
-            "location": locations,
-
-            "content": {
-                "type": "text",
-                "text": chunk_text
-            },
-
-            "metadata": {
-                "source": parent["metadata"]["source"],
-                "file_type": parent["metadata"]["file_type"],
-                "estimated_tokens": estimate_tokens(
-                    chunk_text
-                )
-            }
-        })
-
     return children
-
 
 def create_chunks(
     document,
     parent_target_tokens=1800,
-    child_target_tokens=800,
-    child_overlap_tokens=100
+    child_target_tokens=400,
+    child_overlap_tokens=50
 ):
     """
     Complete parent-child chunking pipeline.

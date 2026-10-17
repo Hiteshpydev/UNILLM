@@ -159,3 +159,4 @@ def parse_docx(file_path):
         raise ValueError(
             f"Could not parse DOCX: {e}"
         )
+    
