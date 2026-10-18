@@ -1,5 +1,6 @@
 import streamlit as st
 from ingestion.ingestion_manager import process_file
+from retrieval.indexer import index_document
 import tempfile
 import os
 import hashlib
@@ -81,6 +82,8 @@ if uploaded_files:
             result = process_file(temp_path)
 
             result["metadata"]["document_id"] = document_id
+
+            index_result = index_document(result)
 
             st.session_state.documents.append(result)
 
