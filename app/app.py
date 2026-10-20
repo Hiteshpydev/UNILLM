@@ -1,23 +1,35 @@
+import os
+import uuid
+import hashlib
+import tempfile
+
 import streamlit as st
+
 from ingestion.ingestion_manager import process_file
 from retrieval.indexer import index_document
-import tempfile
-import os
-import hashlib
-
-# --------------------------------------------------
-# Page configuration
-# --------------------------------------------------
-
-st.set_page_config(
-    page_title="UNILLM",
-    page_icon="📚"
+from retrieval.vector_store import (
+    get_qdrant_client,
+    delete_session_chunks,
 )
 
 
-# --------------------------------------------------
-# Session state
-# --------------------------------------------------
+# ============================================================
+# STREAMLIT CONFIGURATION
+# ============================================================
+
+st.set_page_config(
+    page_title="UNILLM",
+    page_icon="📚",
+    layout="wide",
+)
+
+
+# ============================================================
+# SESSION STATE INITIALIZATION
+# ============================================================
+
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
 
 if "documents" not in st.session_state:
     st.session_state.documents = []
@@ -25,34 +37,48 @@ if "documents" not in st.session_state:
 if "processed_files" not in st.session_state:
     st.session_state.processed_files = set()
 
+if "session_image_paths" not in st.session_state:
+    st.session_state.session_image_paths = set()
 
-# --------------------------------------------------
-# UI
-# --------------------------------------------------
+
+# ============================================================
+# APPLICATION HEADER
+# ============================================================
 
 st.title("📚 UNILLM")
 
 st.write(
-    "Upload your study materials."
+    "Upload your study materials to process and index them "
+    "for your study session."
 )
 
+st.caption(
+    f"Study session ID: {st.session_state.session_id}"
+)
+
+
+# ============================================================
+# DOCUMENT UPLOAD
+# ============================================================
 
 uploaded_files = st.file_uploader(
     "Upload your study materials",
     type=["pdf", "pptx", "docx"],
-    accept_multiple_files=True
+    accept_multiple_files=True,
+    help="Supported formats: PDF, PowerPoint, and Word documents.",
 )
 
 
-# --------------------------------------------------
-# Process uploaded files
-# --------------------------------------------------
+# ============================================================
+# PROCESS AND INDEX DOCUMENTS
+# ============================================================
 
 if uploaded_files:
 
     for uploaded_file in uploaded_files:
 
-        # Skip files that have already been processed
+        # Avoid processing the same filename repeatedly
+        # during Streamlit reruns.
         if uploaded_file.name in st.session_state.processed_files:
             continue
 
@@ -60,47 +86,95 @@ if uploaded_files:
             uploaded_file.name
         )[1].lower()
 
-        # Save uploaded file temporarily
-        file_bytes = uploaded_file.read()
+        file_bytes = uploaded_file.getvalue()
 
         document_id = hashlib.sha256(
             file_bytes
         ).hexdigest()
 
-
-        with tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=file_extension
-        ) as temp_file:
-
-            temp_file.write(file_bytes)
-            temp_path = temp_file.name
+        temp_path = None
 
         try:
 
-            # Send file to ingestion manager
+            # ------------------------------------------------
+            # Save uploaded file temporarily
+            # ------------------------------------------------
+
+            with tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=file_extension,
+            ) as temp_file:
+
+                temp_file.write(file_bytes)
+                temp_path = temp_file.name
+
+            # ------------------------------------------------
+            # Parse document
+            # ------------------------------------------------
+
             result = process_file(temp_path)
 
+            # Attach document and session metadata.
             result["metadata"]["document_id"] = document_id
+            result["metadata"]["session_id"] = (
+                st.session_state.session_id
+            )
+
+            # ------------------------------------------------
+            # Track extracted images
+            # ------------------------------------------------
+
+            # The parser stores images under:
+            # data -> content -> image_path
+
+            for item in result.get("data", []):
+
+                if not isinstance(item, dict):
+                    continue
+
+                content = item.get("content", {})
+
+                if not isinstance(content, dict):
+                    continue
+
+                if content.get("type") == "image":
+
+                    image_path = content.get("image_path")
+
+                    if image_path:
+                        st.session_state.session_image_paths.add(
+                            os.path.abspath(image_path)
+                        )
+
+            # ------------------------------------------------
+            # Index document in Qdrant
+            # ------------------------------------------------
 
             index_result = index_document(result)
 
+            # ------------------------------------------------
+            # Update Streamlit session state
+            # ------------------------------------------------
+
             st.session_state.documents.append(result)
 
-            # Remember processed file
             st.session_state.processed_files.add(
                 uploaded_file.name
             )
 
             st.success(
-                f"Processed: {uploaded_file.name}"
+                f"Successfully processed: {uploaded_file.name}"
+            )
+
+            st.write(
+                "Indexed chunks: "
+                f"{index_result.get('indexed_count', 0)}"
             )
 
         except ValueError as e:
 
             st.error(
-                f"Could not process "
-                f"{uploaded_file.name}: {e}"
+                f"Could not process {uploaded_file.name}: {e}"
             )
 
         except Exception as e:
@@ -112,51 +186,166 @@ if uploaded_files:
 
         finally:
 
-            # Remove temporary file
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+            # ------------------------------------------------
+            # Remove temporary uploaded file
+            # ------------------------------------------------
+
+            if temp_path and os.path.exists(temp_path):
+
+                try:
+                    os.remove(temp_path)
+
+                except OSError as e:
+                    st.warning(
+                        f"Could not remove temporary upload file: {e}"
+                    )
 
 
-# --------------------------------------------------
-# Display session document count
-# --------------------------------------------------
+# ============================================================
+# SESSION DOCUMENT SUMMARY
+# ============================================================
 
 if st.session_state.documents:
 
     st.success(
-        f"Total documents in session: "
+        "Total documents in this session: "
         f"{len(st.session_state.documents)}"
     )
 
-
-# --------------------------------------------------
-# Display uploaded documents
-# --------------------------------------------------
-
-if st.session_state.documents:
-
-    st.subheader("📚 Documents")
+    st.subheader("📄 Uploaded Documents")
 
     for document in st.session_state.documents:
 
-        metadata = document["metadata"]
+        metadata = document.get("metadata", {})
 
         st.write(
-            f"**{metadata['source']}**"
+            f"**{metadata.get('source', 'Unknown document')}**"
         )
 
         st.write(
-            f"Document ID: `{metadata['document_id']}`"
-        )
-
-
-        st.write(
-            f"Type: `{metadata['file_type']}`"
+            f"Document ID: `{metadata.get('document_id', 'N/A')}`"
         )
 
         st.write(
-            f"Extracted items: "
-            f"{len(document['data'])}"
+            f"Type: `{metadata.get('file_type', 'Unknown')}`"
+        )
+
+        st.write(
+            f"Extracted items: {len(document.get('data', []))}"
         )
 
         st.divider()
+
+
+# ============================================================
+# END STUDY SESSION
+# ============================================================
+
+st.divider()
+
+st.header("📚 Before You End Your Study Session")
+
+st.markdown(
+    """
+    **⚠️ Important: Press the button below before ending your
+    study session.**
+
+    Ending your session will:
+
+    - 🗑️ Delete the indexed chunks belonging to this session from Qdrant.
+    - 📄 Clear the current session's document list.
+    - 🔄 Reset the processed-file tracking.
+    - 🖼️ Attempt to remove tracked extracted images.
+    - 🆕 Start a fresh study session.
+
+    **Please note:** If you close the browser without pressing the button,
+    your indexed data may remain in the vector database.
+    """
+)
+
+st.subheader("🗑️ End Study Session")
+
+
+# ============================================================
+# SESSION CLEANUP BUTTON
+# ============================================================
+
+if st.button(
+    "End Study Session",
+    type="primary",
+    use_container_width=True,
+):
+
+    current_session_id = st.session_state.session_id
+
+    try:
+
+        # ----------------------------------------------------
+        # Delete current session's Qdrant points
+        # ----------------------------------------------------
+
+        client = get_qdrant_client()
+
+        deleted_count = delete_session_chunks(
+            client=client,
+            session_id=current_session_id,
+        )
+
+        # ----------------------------------------------------
+        # Remove tracked extracted images
+        # ----------------------------------------------------
+
+        image_cleanup_errors = []
+
+        for image_path in list(
+            st.session_state.session_image_paths
+        ):
+
+            try:
+
+                if os.path.isfile(image_path):
+                    os.remove(image_path)
+
+            except OSError as e:
+
+                image_cleanup_errors.append(
+                    f"{image_path}: {e}"
+                )
+
+        # ----------------------------------------------------
+        # Clear current session state
+        # ----------------------------------------------------
+
+        st.session_state.documents = []
+        st.session_state.processed_files = set()
+        st.session_state.session_image_paths = set()
+
+        # Start a new study session.
+        st.session_state.session_id = str(uuid.uuid4())
+
+        # ----------------------------------------------------
+        # Report cleanup result
+        # ----------------------------------------------------
+
+        st.success(
+            "✅ Study session ended successfully. "
+           
+        )
+
+        if image_cleanup_errors:
+
+            st.warning(
+                "The Qdrant cleanup succeeded, but some extracted "
+                "images could not be deleted:\n\n"
+                + "\n".join(image_cleanup_errors)
+            )
+
+        # Refresh the application.
+        st.rerun()
+
+    except Exception as e:
+
+        st.error(
+            "❌ Could not completely end the study session. "
+            f"Error: {e}"
+        )

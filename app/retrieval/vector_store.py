@@ -1,4 +1,3 @@
-
 import os
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
@@ -7,24 +6,36 @@ from dotenv import load_dotenv
 from qdrant_client import QdrantClient, models
 
 
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
 
 COLLECTION_NAME = "unillm_chunks"
+
 DENSE_VECTOR_NAME = "dense"
 SPARSE_VECTOR_NAME = "bm25"
+
 VECTOR_SIZE = 1024
 BM25_MODEL = "qdrant/bm25"
 
 
+# ============================================================
+# QDRANT CLIENT
+# ============================================================
+
 def get_qdrant_client() -> QdrantClient:
     """Connect to Qdrant Cloud."""
+
     url = os.getenv("QDRANT_URL")
     api_key = os.getenv("QDRANT_API_KEY")
 
     if not url or not api_key:
         raise ValueError(
-            "Set QDRANT_URL and QDRANT_API_KEY in the project .env file."
+            "Set QDRANT_URL and QDRANT_API_KEY "
+            "in the project .env file."
         )
 
     return QdrantClient(
@@ -34,11 +45,16 @@ def get_qdrant_client() -> QdrantClient:
     )
 
 
+# ============================================================
+# COLLECTION MANAGEMENT
+# ============================================================
+
 def create_collection(
     client: QdrantClient,
     collection_name: str = COLLECTION_NAME,
-) -> None:
-    """Create a collection with named dense and BM25 vectors."""
+):
+    """Create the Qdrant collection if it does not exist."""
+
     if client.collection_exists(collection_name):
         return
 
@@ -58,35 +74,55 @@ def create_collection(
     )
 
 
+# ============================================================
+# SESSION PAYLOAD INDEX
+# ============================================================
+
+def ensure_session_id_index(
+    client: QdrantClient,
+    collection_name: str = COLLECTION_NAME,
+):
+    """Ensure session_id is indexed for filtered operations."""
+
+    if not client.collection_exists(collection_name):
+        create_collection(client, collection_name)
+
+    client.create_payload_index(
+        collection_name=collection_name,
+        field_name="session_id",
+        field_schema=models.PayloadSchemaType.KEYWORD,
+        wait=True,
+    )
+
+
+# ============================================================
+# POINT ID GENERATION
+# ============================================================
+
 def _point_id(identifier: str | int) -> str:
-    """Generate a stable UUID from a chunk identifier."""
+    """Generate a deterministic UUID from an identifier."""
+
     return str(uuid5(NAMESPACE_URL, str(identifier)))
 
+
+# ============================================================
+# UPSERT CHUNKS
+# ============================================================
 
 def upsert_chunks(
     client: QdrantClient,
     chunks: list[dict],
     collection_name: str = COLLECTION_NAME,
-) -> None:
-    """
-    Store text and image chunks.
+):
+    """Insert or update chunks in Qdrant."""
 
-    Required fields per chunk:
-        id: stable unique chunk identifier
-        dense_vector: 1024-dimensional Jina CLIP v2 embedding
-        payload: metadata dictionary
-
-    Text chunks additionally require:
-        text: text used for Qdrant BM25 inference
-
-    Image chunks can omit text and store only the dense vector.
-    """
     if not client.collection_exists(collection_name):
         create_collection(client, collection_name)
 
     points = []
 
     for chunk in chunks:
+
         identifier = chunk["id"]
         dense_vector = chunk["dense_vector"]
         payload = chunk.get("payload", {})
@@ -94,20 +130,21 @@ def upsert_chunks(
 
         if len(dense_vector) != VECTOR_SIZE:
             raise ValueError(
-                f"Chunk {identifier!r}: expected {VECTOR_SIZE} "
-                f"dense dimensions, got {len(dense_vector)}."
+                f"Expected dense vector size {VECTOR_SIZE}, "
+                f"got {len(dense_vector)}."
             )
 
         if not isinstance(payload, dict):
-            raise TypeError("Chunk payload must be a dictionary.")
+            raise TypeError(
+                "Chunk payload must be a dictionary."
+            )
 
         vectors = {
             DENSE_VECTOR_NAME: dense_vector,
         }
 
-        # Qdrant generates the sparse BM25 vector server-side.
-        # Image-only chunks do not receive a sparse vector.
-        if text is not None and text.strip():
+        # Generate the BM25 sparse vector from searchable text.
+        if isinstance(text, str) and text.strip():
             vectors[SPARSE_VECTOR_NAME] = models.Document(
                 text=text,
                 model=BM25_MODEL,
@@ -127,3 +164,69 @@ def upsert_chunks(
             points=points,
             wait=True,
         )
+
+    return len(points)
+
+
+# ============================================================
+# DELETE SESSION CHUNKS
+# ============================================================
+
+def delete_session_chunks(
+    client: QdrantClient,
+    session_id: str,
+    collection_name: str = COLLECTION_NAME,
+) -> int:
+    """
+    Delete only points belonging to the specified study session.
+
+    Returns the number of matching points counted before deletion.
+    """
+
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise ValueError(
+            "A non-empty session_id is required."
+        )
+
+    if not client.collection_exists(collection_name):
+        return 0
+
+    # Ensure Qdrant can filter by session_id.
+    ensure_session_id_index(
+        client,
+        collection_name,
+    )
+
+    session_filter = models.Filter(
+        must=[
+            models.FieldCondition(
+                key="session_id",
+                match=models.MatchValue(
+                    value=session_id,
+                ),
+            )
+        ]
+    )
+
+    # Count matching points before deletion.
+    count_result = client.count(
+        collection_name=collection_name,
+        count_filter=session_filter,
+        exact=True,
+    )
+
+    matching_count = count_result.count
+
+    if matching_count == 0:
+        return 0
+
+    # Delete only points matching this session.
+    client.delete(
+        collection_name=collection_name,
+        points_selector=models.FilterSelector(
+            filter=session_filter,
+        ),
+        wait=True,
+    )
+
+    return matching_count
