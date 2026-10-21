@@ -2,17 +2,16 @@ import os
 import uuid
 import hashlib
 import tempfile
-
 import streamlit as st
 
 from ingestion.ingestion_manager import process_file
 from retrieval.indexer import index_document
+from retrieval.retriever import retrieve_chunks
+from generation.generator import generate_answer
 from retrieval.vector_store import (
     get_qdrant_client,
     delete_session_chunks,
 )
-
-
 # ============================================================
 # STREAMLIT CONFIGURATION
 # ============================================================
@@ -238,6 +237,57 @@ if st.session_state.documents:
 
 
 # ============================================================
+# QUESTION & ANSWER INTERFACE
+# ============================================================
+
+st.divider()
+st.header("💬 Ask Questions About Your Study Materials")
+
+user_question = st.text_input(
+    "Ask a question:",
+    placeholder="e.g., What is machine learning?",
+    disabled=not bool(st.session_state.documents),
+)
+
+if not st.session_state.documents:
+    st.info("💡 Please upload at least one study document to begin asking questions.")
+
+if st.button("Ask Question", type="primary", disabled=not bool(user_question.strip())):
+
+    with st.spinner("Searching materials and generating answer..."):
+        try:
+            # 1. Retrieve top chunks for active session
+            retrieved_chunks = retrieve_chunks(
+                question=user_question,
+                session_id=st.session_state.session_id,
+                limit=5,
+            )
+
+            if not retrieved_chunks:
+                st.warning("No relevant information found in your uploaded materials for this question.")
+            else:
+                # 2. Generate grounded answer
+                gen_result = generate_answer(
+                    question=user_question,
+                    chunks=retrieved_chunks,
+                )
+
+                # 3. Display Answer
+                st.subheader("💡 Answer")
+                st.markdown(gen_result["answer"])
+
+                # 4. Display Citations & Sources
+                st.subheader("📌 Retrieved Sources")
+                with st.expander("View Source Metadata & Chunks", expanded=False):
+                    for source in gen_result.get("sources", []):
+                        st.markdown(f"**{source.get('label', 'Source')}**")
+                        st.json(source)
+
+        except Exception as e:
+            st.error(f"❌ Error generating answer: {e}")
+
+
+# ============================================================
 # END STUDY SESSION
 # ============================================================
 
@@ -272,7 +322,7 @@ st.subheader("🗑️ End Study Session")
 
 if st.button(
     "End Study Session",
-    type="primary",
+    type="secondary",
     use_container_width=True,
 ):
 
@@ -328,8 +378,7 @@ if st.button(
         # ----------------------------------------------------
 
         st.success(
-            "✅ Study session ended successfully. "
-           
+            "✅ Study session ended successfully."
         )
 
         if image_cleanup_errors:

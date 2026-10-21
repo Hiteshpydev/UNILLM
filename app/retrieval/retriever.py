@@ -13,6 +13,7 @@ from retrieval.vector_store import (
 
 def retrieve_chunks(
     question: str,
+    session_id: str | None = None,
     limit: int = 5,
     dense_limit: int = 20,
     sparse_limit: int = 20,
@@ -20,6 +21,7 @@ def retrieve_chunks(
 ) -> list[dict]:
     """
     Retrieve candidates using Qdrant hybrid search and rerank them with Jina.
+    Filters candidates by session_id when provided.
 
     Pipeline:
         Dense retrieval:       20 candidates
@@ -47,28 +49,39 @@ def retrieve_chunks(
             raise ValueError(f"{name} must be a positive integer.")
 
     if limit > candidate_limit:
-        raise ValueError(
-            "limit cannot exceed candidate_limit."
-        )
+        raise ValueError("limit cannot exceed candidate_limit.")
 
     question = question.strip()
 
-    # 1. Create the dense query embedding.
+    # 1. Build optional Qdrant payload filter for session isolation
+    query_filter = None
+    if session_id:
+        query_filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="session_id",
+                    match=models.MatchValue(value=session_id),
+                )
+            ]
+        )
+
+    # 2. Create the dense query embedding
     query_vector = embed_text(
         question,
         input_type="query",
     )
 
-    # 2. Connect to Qdrant Cloud.
+    # 3. Connect to Qdrant Cloud
     client = get_qdrant_client()
 
-    # 3. Retrieve dense + sparse candidates and fuse using RRF.
+    # 4. Retrieve dense + sparse candidates with session filtering, then fuse using RRF
     response = client.query_points(
         collection_name=COLLECTION_NAME,
         prefetch=[
             models.Prefetch(
                 query=query_vector,
                 using=DENSE_VECTOR_NAME,
+                filter=query_filter,
                 limit=dense_limit,
             ),
             models.Prefetch(
@@ -77,6 +90,7 @@ def retrieve_chunks(
                     model=BM25_MODEL,
                 ),
                 using=SPARSE_VECTOR_NAME,
+                filter=query_filter,
                 limit=sparse_limit,
             ),
         ],
@@ -88,7 +102,7 @@ def retrieve_chunks(
         with_vectors=False,
     )
 
-    # 4. Convert Qdrant points into the existing chunk format.
+    # 5. Convert Qdrant points into the existing chunk format
     candidates = []
 
     for point in response.points:
@@ -106,7 +120,7 @@ def retrieve_chunks(
             }
         )
 
-    # 5. Rerank the candidates using Jina Reranker M0.
+    # 6. Rerank the candidates using Jina Reranker M0
     if not candidates:
         return []
 
@@ -116,5 +130,5 @@ def retrieve_chunks(
         top_n=min(limit, len(candidates)),
     )
 
-    # 6. Return the final ranked chunks.
+    # 7. Return the final ranked chunks
     return results
