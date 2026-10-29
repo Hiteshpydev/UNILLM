@@ -227,6 +227,19 @@ def delete_session_chunks(
             filter=session_filter,
         ),
         wait=True,
+        ordering=models.WriteOrdering.STRONG,
     )
+
+    remaining_count = client.count(
+        collection_name=collection_name,
+        count_filter=session_filter,
+        exact=True,
+    ).count
+
+    if remaining_count:
+        raise RuntimeError(
+            "Qdrant cleanup did not remove all points for session "
+            f"{session_id}. Remaining points: {remaining_count}."
+        )
 
     return matching_count

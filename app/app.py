@@ -409,7 +409,8 @@ if st.button(
         # ----------------------------------------------------
 
         st.success(
-            "✅ Study session ended successfully."
+            "✅ Study session ended successfully. "
+            f"Removed {deleted_count} indexed point(s) from Qdrant."
         )
 
         if image_cleanup_errors:
