@@ -3,6 +3,7 @@ import uuid
 import hashlib
 import tempfile
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 
 from ingestion.ingestion_manager import process_file
 from retrieval.indexer import index_document
@@ -12,6 +13,36 @@ from retrieval.vector_store import (
     get_qdrant_client,
     delete_session_chunks,
 )
+
+
+# ============================================================
+# STREAMLIT CLOUD SECRETS
+# ============================================================
+
+def _load_streamlit_secrets() -> None:
+    """Make Streamlit Cloud secrets available to existing integrations."""
+
+    secret_names = (
+        "GEMINI_API_KEY",
+        "QDRANT_API_KEY",
+        "QDRANT_URL",
+        "JINA_API_KEY",
+    )
+
+    try:
+        for name in secret_names:
+            if name not in os.environ and name in st.secrets:
+                value = st.secrets[name]
+
+                if isinstance(value, str) and value.strip():
+                    os.environ[name] = value.strip()
+    except StreamlitSecretNotFoundError:
+        # Local development can continue using values from .env.
+        return
+
+
+_load_streamlit_secrets()
+
 # ============================================================
 # STREAMLIT CONFIGURATION
 # ============================================================
