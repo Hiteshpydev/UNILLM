@@ -6,3 +6,5 @@ uploads/
 .streamlit/
 # Extracted embedded images
 extracted_images/
+# Local Jina embedding cache
+data/embedding_cache.sqlite3
