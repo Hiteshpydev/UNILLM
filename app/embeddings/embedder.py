@@ -1,4 +1,5 @@
 import base64
+from io import BytesIO
 import hashlib
 import json
 import os
@@ -8,6 +9,7 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+from PIL import Image
 
 
 # Load the existing project .env file
@@ -19,6 +21,7 @@ JINA_MODEL = "jina-clip-v2"
 EMBEDDING_DIMENSIONS = 1024
 REQUEST_TIMEOUT = 60
 MAX_EMBEDDING_TEXT_CHARS = 12000
+IMAGE_EMBEDDING_SIZE = (512, 512)
 EMBEDDING_CACHE_PATH = PROJECT_ROOT / "data" / "embedding_cache.sqlite3"
 
 
@@ -164,7 +167,15 @@ def embed_image(image_path: str) -> list[float]:
     if not path.is_file():
         raise FileNotFoundError(f"Image not found: {image_path}")
 
-    image_bytes = path.read_bytes()
+    with Image.open(path) as image:
+        resized_image = image.convert("RGB").resize(
+            IMAGE_EMBEDDING_SIZE,
+            Image.Resampling.LANCZOS,
+        )
+        image_buffer = BytesIO()
+        resized_image.save(image_buffer, format="PNG")
+        image_bytes = image_buffer.getvalue()
+
     image_base64 = base64.b64encode(image_bytes).decode("utf-8")
     cache_key = _cache_key(image_bytes, "image")
     cached_embedding = _get_cached_embedding(cache_key)
