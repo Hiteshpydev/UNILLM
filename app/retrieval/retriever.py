@@ -15,18 +15,18 @@ def retrieve_chunks(
     question: str,
     session_id: str | None = None,
     limit: int = 5,
-    dense_limit: int = 20,
-    sparse_limit: int = 20,
-    candidate_limit: int = 10,
+    dense_limit: int = 10,
+    sparse_limit: int = 10,
+    candidate_limit: int = 5,
 ) -> list[dict]:
     """
     Retrieve candidates using Qdrant hybrid search and rerank them with Jina.
     Filters candidates by session_id when provided.
 
     Pipeline:
-        Dense retrieval:       20 candidates
-        Sparse BM25 retrieval: 20 candidates
-        RRF fusion:            10 candidates
+        Dense retrieval:       10 candidates
+        Sparse BM25 retrieval: 10 candidates
+        RRF fusion:            5 candidates
         Jina reranking:        final 5 candidates
     """
 

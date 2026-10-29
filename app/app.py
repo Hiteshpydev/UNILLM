@@ -2,6 +2,7 @@ import os
 import uuid
 import hashlib
 import tempfile
+from pathlib import Path
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
@@ -69,6 +70,27 @@ if "processed_files" not in st.session_state:
 
 if "session_image_paths" not in st.session_state:
     st.session_state.session_image_paths = set()
+
+
+def _collect_image_paths(value) -> set[str]:
+    """Find extracted image paths in parser and chunker output."""
+
+    paths = set()
+
+    if isinstance(value, dict):
+        image_path = value.get("image_path")
+
+        if isinstance(image_path, str) and image_path.strip():
+            paths.add(str(Path(image_path).resolve()))
+
+        for item in value.values():
+            paths.update(_collect_image_paths(item))
+
+    elif isinstance(value, list):
+        for item in value:
+            paths.update(_collect_image_paths(item))
+
+    return paths
 
 
 # ============================================================
@@ -157,24 +179,9 @@ if uploaded_files:
             # The parser stores images under:
             # data -> content -> image_path
 
-            for item in result.get("data", []):
-
-                if not isinstance(item, dict):
-                    continue
-
-                content = item.get("content", {})
-
-                if not isinstance(content, dict):
-                    continue
-
-                if content.get("type") == "image":
-
-                    image_path = content.get("image_path")
-
-                    if image_path:
-                        st.session_state.session_image_paths.add(
-                            os.path.abspath(image_path)
-                        )
+            st.session_state.session_image_paths.update(
+                _collect_image_paths(result)
+            )
 
             # ------------------------------------------------
             # Index document in Qdrant
@@ -359,74 +366,64 @@ if st.button(
 
     current_session_id = st.session_state.session_id
 
+    deleted_count = 0
+    qdrant_cleanup_error = None
+
     try:
-
-        # ----------------------------------------------------
-        # Delete current session's Qdrant points
-        # ----------------------------------------------------
-
         client = get_qdrant_client()
-
         deleted_count = delete_session_chunks(
             client=client,
             session_id=current_session_id,
         )
+    except Exception as e:
+        qdrant_cleanup_error = str(e)
 
-        # ----------------------------------------------------
-        # Remove tracked extracted images
-        # ----------------------------------------------------
+    image_cleanup_errors = []
+    deleted_image_count = 0
 
-        image_cleanup_errors = []
+    for image_path in list(st.session_state.session_image_paths):
+        try:
+            path = Path(image_path).resolve()
 
-        for image_path in list(
-            st.session_state.session_image_paths
-        ):
+            if path.is_file():
+                path.unlink()
+                deleted_image_count += 1
 
-            try:
+        except OSError as e:
+            image_cleanup_errors.append(f"{image_path}: {e}")
 
-                if os.path.isfile(image_path):
-                    os.remove(image_path)
+    st.session_state.session_image_paths = set()
 
-            except OSError as e:
-
-                image_cleanup_errors.append(
-                    f"{image_path}: {e}"
-                )
-
-        # ----------------------------------------------------
-        # Clear current session state
-        # ----------------------------------------------------
-
-        st.session_state.documents = []
-        st.session_state.processed_files = set()
-        st.session_state.session_image_paths = set()
-
-        # Start a new study session.
-        st.session_state.session_id = str(uuid.uuid4())
-
-        # ----------------------------------------------------
-        # Report cleanup result
-        # ----------------------------------------------------
-
-        st.success(
-            "✅ Study session ended successfully. "
-            f"Removed {deleted_count} indexed point(s) from Qdrant."
+    if qdrant_cleanup_error:
+        st.error(
+            "❌ Qdrant cleanup failed, so the study session was not reset. "
+            f"Error: {qdrant_cleanup_error}"
         )
 
         if image_cleanup_errors:
-
             st.warning(
-                "The Qdrant cleanup succeeded, but some extracted "
-                "images could not be deleted:\n\n"
+                "Some extracted images could not be deleted:\n\n"
+                + "\n".join(image_cleanup_errors)
+            )
+        else:
+            st.info(
+                f"Deleted {deleted_image_count} extracted image(s)."
+            )
+    else:
+        st.session_state.documents = []
+        st.session_state.processed_files = set()
+        st.session_state.session_id = str(uuid.uuid4())
+
+        st.success(
+            "✅ Study session ended successfully. "
+            f"Removed {deleted_count} indexed point(s) from Qdrant "
+            f"and {deleted_image_count} extracted image(s)."
+        )
+
+        if image_cleanup_errors:
+            st.warning(
+                "Some extracted images could not be deleted:\n\n"
                 + "\n".join(image_cleanup_errors)
             )
 
-        # Refresh the application.
         st.rerun()
-
-    except Exception as e:
-
-        st.error(
-            "❌ Could not completely end the study session. "
-            f"Error: {e}"
-        )

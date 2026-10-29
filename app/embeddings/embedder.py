@@ -14,6 +14,7 @@ JINA_API_URL = "https://api.jina.ai/v1/embeddings"
 JINA_MODEL = "jina-clip-v2"
 EMBEDDING_DIMENSIONS = 1024
 REQUEST_TIMEOUT = 60
+MAX_EMBEDDING_TEXT_CHARS = 12000
 
 
 def embed_text(
@@ -37,6 +38,8 @@ def embed_text(
 
     if not isinstance(text, str) or not text.strip():
         raise ValueError("Text to embed must be a non-empty string.")
+
+    text = text.strip()[:MAX_EMBEDDING_TEXT_CHARS]
 
     task_mapping = {
         "document": "retrieval.query",

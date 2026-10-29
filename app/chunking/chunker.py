@@ -532,7 +532,7 @@ def create_chunks(
     document,
     parent_target_tokens=1800,
     child_target_tokens=400,
-    child_overlap_tokens=50
+    child_overlap_tokens=0
 ):
     """
     Complete parent-child chunking pipeline.

@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 from chunking.chunker import create_chunks
@@ -56,6 +57,8 @@ def index_document(document: dict) -> dict:
     chunked = create_chunks(document)
 
     qdrant_chunks = []
+    text_embedding_cache = {}
+    image_embedding_cache = {}
 
     for child in chunked["children"]:
 
@@ -72,10 +75,13 @@ def index_document(document: dict) -> dict:
 
             text_for_search = content["text"]
 
-            dense_vector = embed_text(
-                text_for_search,
-                input_type="document",
-            )
+            if text_for_search not in text_embedding_cache:
+                text_embedding_cache[text_for_search] = embed_text(
+                    text_for_search,
+                    input_type="document",
+                )
+
+            dense_vector = text_embedding_cache[text_for_search]
 
         elif content_type == "table":
 
@@ -83,10 +89,13 @@ def index_document(document: dict) -> dict:
                 content["data"]
             )
 
-            dense_vector = embed_text(
-                text_for_search,
-                input_type="document",
-            )
+            if text_for_search not in text_embedding_cache:
+                text_embedding_cache[text_for_search] = embed_text(
+                    text_for_search,
+                    input_type="document",
+                )
+
+            dense_vector = text_embedding_cache[text_for_search]
 
         elif content_type == "image":
 
@@ -97,9 +106,16 @@ def index_document(document: dict) -> dict:
             if not image_path.is_absolute():
                 image_path = Path.cwd() / image_path
 
-            dense_vector = embed_image(
-                str(image_path)
-            )
+            image_hash = hashlib.sha256(
+                image_path.read_bytes()
+            ).hexdigest()
+
+            if image_hash not in image_embedding_cache:
+                image_embedding_cache[image_hash] = embed_image(
+                    str(image_path)
+                )
+
+            dense_vector = image_embedding_cache[image_hash]
 
         else:
 
