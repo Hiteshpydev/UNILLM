@@ -82,17 +82,18 @@ def ensure_session_id_index(
     client: QdrantClient,
     collection_name: str = COLLECTION_NAME,
 ):
-    """Ensure session_id is indexed for filtered operations."""
+    """Ensure current and legacy session fields are indexed."""
 
     if not client.collection_exists(collection_name):
         create_collection(client, collection_name)
 
-    client.create_payload_index(
-        collection_name=collection_name,
-        field_name="session_id",
-        field_schema=models.PayloadSchemaType.KEYWORD,
-        wait=True,
-    )
+    for field_name in ("session_id", "metadata.session_id"):
+        client.create_payload_index(
+            collection_name=collection_name,
+            field_name=field_name,
+            field_schema=models.PayloadSchemaType.KEYWORD,
+            wait=True,
+        )
 
 
 # ============================================================
@@ -198,14 +199,16 @@ def delete_session_chunks(
     )
 
     session_filter = models.Filter(
-        must=[
+        should=[
             models.FieldCondition(
                 key="session_id",
-                match=models.MatchValue(
-                    value=session_id,
-                ),
-            )
-        ]
+                match=models.MatchValue(value=session_id),
+            ),
+            models.FieldCondition(
+                key="metadata.session_id",
+                match=models.MatchValue(value=session_id),
+            ),
+        ],
     )
 
     # Count matching points before deletion.
@@ -220,11 +223,34 @@ def delete_session_chunks(
     if matching_count == 0:
         return 0
 
-    # Delete only points matching this session.
+    # Resolve matching IDs first, then delete those exact points.
+    point_ids = []
+    offset = None
+
+    while True:
+        records, offset = client.scroll(
+            collection_name=collection_name,
+            scroll_filter=session_filter,
+            limit=100,
+            offset=offset,
+            with_payload=False,
+            with_vectors=False,
+        )
+        point_ids.extend(record.id for record in records)
+
+        if offset is None:
+            break
+
+    if not point_ids:
+        raise RuntimeError(
+            f"Qdrant count found {matching_count} points for session "
+            f"{session_id}, but they could not be read for deletion."
+        )
+
     client.delete(
         collection_name=collection_name,
-        points_selector=models.FilterSelector(
-            filter=session_filter,
+        points_selector=models.PointIdsList(
+            points=point_ids,
         ),
         wait=True,
         ordering=models.WriteOrdering.STRONG,
