@@ -15,6 +15,47 @@ load_dotenv(PROJECT_ROOT / ".env")
 GEMINI_MODEL = "gemini-3.8-flash"
 
 
+def _location_items(location) -> list[dict]:
+    """Normalize a chunk location into a list of location dictionaries."""
+    if isinstance(location, dict):
+        return [location]
+
+    if isinstance(location, list):
+        return [
+            item for item in location
+            if isinstance(item, dict)
+        ]
+
+    return []
+
+
+def _format_citation(document_name: str, location) -> str:
+    """Create a human-readable document and location citation."""
+    location_labels = []
+
+    for item in _location_items(location):
+        location_type = item.get("type")
+        location_number = item.get("number")
+
+        if location_number is None:
+            continue
+
+        label = {
+            "page": "Page",
+            "slide": "Slide",
+            "paragraph": "Paragraph",
+            "table": "Table",
+            "image": "Image",
+        }.get(location_type, "Location")
+        location_labels.append(f"{label} {location_number}")
+
+    if not location_labels:
+        return document_name
+
+    unique_labels = list(dict.fromkeys(location_labels))
+    return f"{document_name} - {', '.join(unique_labels)}"
+
+
 def generate_answer(question, chunks, temperature=0.2):
     """
     Generate an answer using retrieved text, tables, and images.
@@ -113,6 +154,10 @@ Rules:
         # Preserve the original chunk metadata
         source_info = {
             "label": label,
+            "document_name": (
+                chunk.get("metadata", {}).get("source")
+                or "Unknown document"
+            ),
             "chunk_id": chunk.get("chunk_id"),
             "parent_id": chunk.get("parent_id"),
             "document_id": chunk.get("document_id"),
@@ -120,6 +165,10 @@ Rules:
             "metadata": chunk.get("metadata", {}),
             "content_type": content_type,
         }
+        source_info["citation"] = _format_citation(
+            source_info["document_name"],
+            source_info["location"],
+        )
 
         sources.append(source_info)
 

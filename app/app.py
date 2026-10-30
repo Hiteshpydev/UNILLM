@@ -316,10 +316,20 @@ if st.button("Ask Question", type="primary", disabled=not bool(user_question.str
 
                 # 4. Display Citations & Sources
                 st.subheader("📌 Retrieved Sources")
-                with st.expander("View Source Metadata & Chunks", expanded=False):
+                with st.expander("View document citations", expanded=True):
                     for source in gen_result.get("sources", []):
-                        st.markdown(f"**{source.get('label', 'Source')}**")
-                        st.json(source)
+                        citation = source.get(
+                            "citation",
+                            source.get("document_name", "Unknown document"),
+                        )
+                        st.markdown(
+                            f"**[{source.get('label', 'Source')}] "
+                            f"{citation}**"
+                        )
+                        st.caption(
+                            f"Content type: "
+                            f"{source.get('content_type', 'unknown')}"
+                        )
 
         except Exception as e:
             st.error(f"❌ Error generating answer: {e}")

@@ -223,34 +223,12 @@ def delete_session_chunks(
     if matching_count == 0:
         return 0
 
-    # Resolve matching IDs first, then delete those exact points.
-    point_ids = []
-    offset = None
-
-    while True:
-        records, offset = client.scroll(
-            collection_name=collection_name,
-            scroll_filter=session_filter,
-            limit=100,
-            offset=offset,
-            with_payload=False,
-            with_vectors=False,
-        )
-        point_ids.extend(record.id for record in records)
-
-        if offset is None:
-            break
-
-    if not point_ids:
-        raise RuntimeError(
-            f"Qdrant count found {matching_count} points for session "
-            f"{session_id}, but they could not be read for deletion."
-        )
-
+    # Delete by payload filter in one atomic Qdrant operation. This avoids
+    # racing between scroll and delete and does not depend on returned IDs.
     client.delete(
         collection_name=collection_name,
-        points_selector=models.PointIdsList(
-            points=point_ids,
+        points_selector=models.FilterSelector(
+            filter=session_filter,
         ),
         wait=True,
         ordering=models.WriteOrdering.STRONG,
