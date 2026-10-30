@@ -79,7 +79,7 @@ To preserve broader contextual explanations while maintaining search precision:
 ### 3. Vector Storage & Hybrid Retrieval (`app/retrieval/`)
 * **Qdrant Vector Database (`vector_store.py`):** Stores dense embeddings and sparse text representations in the `unillm_chunks` collection.
 * **Hybrid Search (`retriever.py`):** Combines dense vector similarity with sparse Qdrant BM25 keyword matching using Reciprocal Rank Fusion (RRF).
-* **Jina Reranker (`reranker.py`):** Re-scores candidates using the `jina-reranker-m0` API model across text, formatted table markdown, and base64-encoded image data.
+* **Jina Reranker (`reranker.py`):** Re-scores candidates using the `jina-reranker-m0` API model across text, formatted table markdown, and base64-encoded 512×512 RGB image data.
 * **Image Embeddings (`embedder.py`):** Resizes every document image to 512×512 RGB pixels before generating its Jina CLIP embedding.
 
 ---
@@ -144,4 +144,4 @@ E:\UNILM\
 ├── .env.example                    # Environment variable template
 ├── requirements.txt                # Python dependency configuration
 └── README.md                       # Project documentation
-```
+``` 

@@ -1,15 +1,18 @@
 import base64
+from io import BytesIO
 import os
 from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+from PIL import Image
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
 
 JINA_RERANK_URL = "https://api.jina.ai/v1/rerank"
 JINA_RERANK_MODEL = "jina-reranker-m0"
+RERANK_IMAGE_SIZE = (512, 512)
 
 
 def _image_to_data_url(image_path: str) -> str:
@@ -35,8 +38,16 @@ def _image_to_data_url(image_path: str) -> str:
     if mime_type is None:
         raise ValueError(f"Unsupported image format: {suffix}")
 
-    encoded = base64.b64encode(path.read_bytes()).decode("utf-8")
-    return f"data:{mime_type};base64,{encoded}"
+    with Image.open(path) as image:
+        resized_image = image.convert("RGB").resize(
+            RERANK_IMAGE_SIZE,
+            Image.Resampling.LANCZOS,
+        )
+        image_buffer = BytesIO()
+        resized_image.save(image_buffer, format="PNG")
+        encoded = base64.b64encode(image_buffer.getvalue()).decode("utf-8")
+
+    return f"data:image/png;base64,{encoded}"
 
 
 def _chunk_to_document(chunk: dict) -> dict | None:
